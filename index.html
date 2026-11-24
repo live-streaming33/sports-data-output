@@ -1,0 +1,263 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Live Stream Player</title>
+  <!-- Shaka Player UI CSS & JS -->
+  <link rel="stylesheet" href="https://jsdelivr.net" />
+  <script src="https://jsdelivr.net"></script>
+  <link href="https://googleapis.com" rel="stylesheet">
+
+  <style>
+    * {
+      box-sizing: border-box;
+      margin: 0;
+      padding: 0;
+    }
+
+    body {
+      font-family: 'Inter', sans-serif;
+      background: radial-gradient(circle at top, #181c2e 0%, #090b10 100%);
+      color: #ffffff;
+      min-height: 100vh;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      padding: 20px;
+    }
+
+    .player-card {
+      width: 100%;
+      max-width: 960px;
+      background: rgba(255, 255, 255, 0.04);
+      border: 1px solid rgba(255, 255, 255, 0.1);
+      border-radius: 18px;
+      padding: 18px;
+      box-shadow: 0 25px 60px rgba(0, 0, 0, 0.65);
+      backdrop-filter: blur(12px);
+    }
+
+    .top-bar {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      margin-bottom: 14px;
+      padding: 0 4px;
+    }
+
+    .stream-title {
+      font-size: 16px;
+      font-weight: 600;
+      letter-spacing: 0.3px;
+      color: #f1f5f9;
+      display: flex;
+      align-items: center;
+      gap: 10px;
+    }
+
+    .live-badge {
+      background: #ef4444;
+      color: #fff;
+      font-size: 11px;
+      font-weight: 600;
+      padding: 3px 8px;
+      border-radius: 6px;
+      letter-spacing: 0.8px;
+      text-transform: uppercase;
+      animation: pulse 1.8s infinite;
+    }
+
+    @keyframes pulse {
+      0%, 100% { opacity: 1; }
+      50% { opacity: 0.55; }
+    }
+
+    .url-bar {
+      display: flex;
+      gap: 10px;
+      margin-bottom: 14px;
+    }
+
+    .url-input {
+      flex: 1;
+      background: rgba(0, 0, 0, 0.45);
+      border: 1px solid rgba(255, 255, 255, 0.12);
+      border-radius: 10px;
+      padding: 10px 14px;
+      color: #e2e8f0;
+      font-size: 13px;
+      outline: none;
+      transition: border 0.2s;
+    }
+
+    .url-input:focus {
+      border-color: #3b82f6;
+    }
+
+    .play-btn {
+      background: linear-gradient(135deg, #3b82f6, #2563eb);
+      color: white;
+      border: none;
+      border-radius: 10px;
+      padding: 10px 20px;
+      font-size: 13px;
+      font-weight: 600;
+      cursor: pointer;
+      transition: transform 0.15s, opacity 0.2s;
+    }
+
+    .play-btn:hover {
+      opacity: 0.92;
+      transform: translateY(-1px);
+    }
+
+    .video-wrapper {
+      position: relative;
+      width: 100%;
+      aspect-ratio: 16 / 9;
+      background: #000;
+      border-radius: 12px;
+      overflow: hidden;
+      box-shadow: 0 10px 30px rgba(0, 0, 0, 0.5);
+    }
+
+    video {
+      width: 100%;
+      height: 100%;
+    }
+
+    /* Custom Shaka UI Theme Accent */
+    .shaka-seek-bar-container .shaka-played {
+      background-color: #3b82f6 !important;
+    }
+
+    .status-bar {
+      margin-top: 12px;
+      font-size: 12px;
+      color: #94a3b8;
+      display: flex;
+      justify-content: space-between;
+      padding: 0 4px;
+    }
+
+    .error-text {
+      color: #f87171;
+    }
+  </style>
+</head>
+<body>
+
+  <div class="player-card">
+    <div class="top-bar">
+      <div class="stream-title">
+        <span class="live-badge">LIVE</span>
+        <span>HLS Stream Player</span>
+      </div>
+    </div>
+
+    <div class="url-bar">
+      <input
+        type="text"
+        id="streamUrl"
+        class="url-input"
+        value="https://akamaized.net"
+        placeholder="Enter .m3u8 URL here..."
+      />
+      <button class="play-btn" onclick="loadStream()">Load Stream</button>
+    </div>
+
+    <div data-shaka-player-container class="video-wrapper">
+      <video autoplay muted playsinline data-shaka-player id="video"></video>
+    </div>
+
+    <div class="status-bar">
+      <span id="statusText">Initializing player...</span>
+      <span>Shaka Player HLS</span>
+    </div>
+  </div>
+
+  <script>
+    let player;
+    let currentTokenQuery = '';
+
+    async function initApp() {
+      shaka.polyfill.installAll();
+
+      const video = document.getElementById('video');
+      const ui = video['ui'];
+      const controls = ui.getControls();
+      player = controls.getPlayer();
+
+      // UI Controls configuration (Quality, Audio, Speed, Fullscreen, PiP)
+      ui.configure({
+        controlPanelElements: [
+          'play_pause',
+          'time_and_duration',
+          'spacer',
+          'mute',
+          'volume',
+          'quality',
+          'language',
+          'picture_in_picture',
+          'fullscreen'
+        ],
+        seekBarColors: {
+          base: 'rgba(255, 255, 255, 0.25)',
+          buffered: 'rgba(255, 255, 255, 0.5)',
+          played: '#3b82f6'
+        }
+      });
+
+      // Akamai Token Filter for sub-playlists & .ts segments
+      player.getNetworkingEngine().registerRequestFilter((type, request) => {
+        if (currentTokenQuery && request.uris && request.uris.length > 0) {
+          const uri = request.uris[0];
+          if (!uri.includes('hdnea=')) {
+            const separator = uri.includes('?') ? '&' : '?';
+            request.uris[0] = uri + separator + currentTokenQuery;
+          }
+        }
+      });
+
+      player.addEventListener('error', (event) => {
+        const err = event.detail;
+        setStatus(`Error (${err.code}): Stream blocked or expired (Check Console F12)`, true);
+        console.error('Shaka Error:', err);
+      });
+
+      // Auto-load initial URL
+      loadStream();
+    }
+
+    async function loadStream() {
+      const manifestUri = document.getElementById('streamUrl').value.trim();
+      if (!manifestUri || !player) return;
+
+      // Extract ?hdnea=... token properly
+      const qIndex = manifestUri.indexOf('?');
+      currentTokenQuery = qIndex !== -1 ? manifestUri.substring(qIndex + 1) : '';
+
+      setStatus('Loading stream...', false);
+
+      try {
+        await player.load(manifestUri);
+        setStatus('Playing live stream', false);
+      } catch (e) {
+        setStatus(`Failed to load (Code: ${e.code || 'CORS/Network'})`, true);
+        console.error('Load exception:', e);
+      }
+    }
+
+    function setStatus(msg, isError) {
+      const el = document.getElementById('statusText');
+      el.textContent = msg;
+      el.className = isError ? 'error-text' : '';
+    }
+
+    document.addEventListener('shaka-ui-loaded', initApp);
+  </script>
+
+</body>
+</html>
